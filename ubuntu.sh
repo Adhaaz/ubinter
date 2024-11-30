@@ -1,138 +1,140 @@
-#!/data/data/com.termux/files/usr/bin/bash
+!/data/data/com.termux/files/usr/bin/bash
 
-# Check for root access
-if [ "$(id -u)" == "0" ]; then
-   echo "This script should not be run as root. Exiting."
-   exit 1
-fi
+time1="$( date +"%r" )"
 
-# Declare variables
-UBUNTU_URL="https://cdimage.ubuntu.com/ubuntu-base/jammy/ubuntu-base-22.04.5-base-arm64.tar.gz"
-UBUNTU_TAR="ubuntu-base-jammy-arm64.tar.gz"
-DEST_DIR="$HOME/ubuntu-jammy"
-USERNAME="daffa"
-PASSWORD="Daffa30"
-MIRRORED_URL="http://mirrors.kernel.org/ubuntu/dists/jammy/main/binary-arm64/Packages.gz"
-PKG_LIST_FILE="/tmp/packages_list.txt"
-PROOT_TMP="/tmp/proot_tmp"
+install_ubuntu() {
+    local directory=ubuntu-fs
+    local ubuntu_version='22.04'
+    local tar_file="ubuntu.tar.gz"
 
-# Function to ask for confirmation
-confirm() {
-    read -r -p "Do you want to proceed? [Y/n] " response
-    case "$response" in
-        [nN][oO]|[nN])
-            echo "Installation cancelled."
-            exit 0
-            ;;
-        *)
-            ;;
-    esac
-}
-
-# Check if required tools are installed
-check_tool() {
-    if ! command -v "$1" &> /dev/null; then
-        echo "$1 is required but not installed. Installing $1..."
-        pkg install "$1" -y
-    fi
-}
-
-# Install required tools
-for tool in proot wget tar; do
-    check_tool $tool
-done
-
-# Create necessary directories
-mkdir -p "$DEST_DIR" "$PROOT_TMP"
-
-# Download Ubuntu base image
-echo "Downloading Ubuntu Jammy base system..."
-if ! wget -O "$DEST_DIR/$UBUNTU_TAR" "$UBUNTU_URL"; then
-    echo "Failed to download the Ubuntu base system. Please check your internet connection."
-    exit 1
-fi
-confirm
-
-# Extract the tarball and handle possible errors
-echo "Extracting Ubuntu image..."
-tar --warning=no-unknown-keyword -xzf "$DEST_DIR/$UBUNTU_TAR" -C "$DEST_DIR"
-if [ $? -ne 0 ]; then
-    echo "Error during extraction. Attempting to fix common issues..."
-    tar --warning=no-unknown-keyword --ignore-zeros -xzf "$DEST_DIR/$UBUNTU_TAR" -C "$DEST_DIR"
-    if [ $? -ne 0 ]; then
-        echo "Failed to extract tarball even after trying to fix errors. Exiting."
+     Check if proot and wget are installed
+    if [ -z "$(command -v proot)" ]; then
+        echo -e "\033[38;5;214m[${time1}]\033[0m \033[38;5;203m[ERROR]:\033[0m \033[38;5;87mPlease install proot.\n"
         exit 1
     fi
+
+    if [ -z "$(command -v wget)" ]; then
+        echo -e "\033[38;5;214m[${time1}]\033[0m \033[38;5;203m[ERROR]:\033[0m \033[38;5;87mPlease install wget.\n"
+        exit 1
+    fi
+
+     Check if the Ubuntu directory already exists
+    if [ -d "$directory" ]; then
+        echo -e "\033[38;5;214m[${time1}]\033[0m \033[38;5;227m[WARNING]:\033[0m \033[38;5;87mUbuntu is already installed. Skipping download and extraction.\n"
+        return
+    fi
+
+     Download Ubuntu root filesystem
+    echo -e "\033[38;5;214m[${time1}]\033[0m \033[38;5;83m[INFO]:\033[0m \033[38;5;87mDownloading the Ubuntu root filesystem, please wait...\n"
+    local architecture=$(dpkg --print-architecture)
+    case "$architecture" in
+        aarch64) architecture="arm64";;
+        arm) architecture="armhf";;
+        amd64|x86_64) architecture="amd64";;
+        *)
+            echo -e "\033[38;5;214m[${time1}]\033[0m \033[38;5;203m[ERROR]:\033[0m \033[38;5;87mUnknown architecture: $architecture\n"
+            exit 1
+            ;;
+    esac
+
+    wget "https://cdimage.ubuntu.com/ubuntu-base/releases/${ubuntu_version}/release/ubuntu-base-${ubuntu_version}-base-${architecture}.tar.gz" -q -O "$tar_file"
+    if [ $? -ne 0 ]; then
+        echo -e "\033[38;5;214m[${time1}]\033[0m \033[38;5;203m[ERROR]:\033[0m \033[38;5;87mFailed to download Ubuntu root filesystem.\n"
+        exit 1
+    fi
+    echo -e "\033[38;5;214m[${time1}]\033[0m \033[38;5;83m[INFO]:\033[0m \033[38;5;87mDownload complete!\n"
+
+     Create the Ubuntu directory and extract the root filesystem
+    mkdir -p "$directory"
+    echo -e "\033[38;5;214m[${time1}]\033[0m \033[38;5;83m[INFO]:\033[0m \033[38;5;87mDecompressing the Ubuntu root filesystem, please wait...\n"
+    proot --link2symlink tar -zxf "$tar_file" --directory="$directory" --exclude='dev'
+    if [ $? -ne 0 ]; then
+        echo -e "\033[38;5;214m[${time1}]\033[0m \033[38;5;203m[ERROR]:\033[0m \033[38;5;87mFailed to decompress the Ubuntu root filesystem.\n"
+        exit 1
+    fi
+    echo -e "\033[38;5;214m[${time1}]\033[0m \033[38;5;83m[INFO]:\033[0m \033[38;5;87mUbuntu root filesystem decompressed successfully!\n"
+
+     Configure network resolution
+    echo -e "\033[38;5;214m[${time1}]\033[0m \033[38;5;83m[INFO]:\033[0m \033[38;5;87mConfiguring network...\n"
+    echo -e "nameserver 8.8.8.8\nnameserver 8.8.4.4\n" > "$directory/etc/resolv.conf"
+
+     Create a user "daffa" with password "Daffa30"
+    mkdir -p "$directory/home/daffa"
+    echo "daffa:Daffa30" | chpasswd --root="$directory"
+    echo -e "\033[38;5;214m[${time1}]\033[0m \033[38;5;83m[INFO]:\033[0m \033[38;5;87mUser 'daffa' created with password 'Daffa30'!\n"
+
+     Setting up the default environment for the user
+    echo -e "!/bin/bash\n" > "$directory/root/.bashrc"
+    echo -e "export LANG=C.UTF-8\nexport PATH=\$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n" >> "$directory/root/.bashrc"
+
+     Set permissions for accessing all folders
+    chmod -R 777 "$directory"
+    echo -e "\033[38;5;214m[${time1}]\033[0m \033[38;5;83m[INFO]:\033[0m \033[38;5;87mPermissions set to allow access to all directories.\n"
+
+     Create the startup script
+    local bin=startubuntu.sh
+    echo -e "\033[38;5;214m[${time1}]\033[0m \033[38;5;83m[INFO]:\033[0m \033[38;5;87mCreating the startup script...\n"
+    cat > "$bin" <<- EOM
+!/bin/bash
+cd \$(dirname \$0)
+ unset LD_PRELOAD in case termux-exec is installed
+unset LD_PRELOAD
+command="proot"
+command+=" --link2symlink"
+command+=" -0"
+command+=" -r $directory"
+command+=" -b /dev"
+command+=" -b /proc"
+command+=" -b /sys"
+command+=" -b ubuntu-fs/tmp:/dev/shm"
+command+=" -b /data/data/com.termux"
+command+=" -b /:/host-rootfs"
+command+=" -b /sdcard"
+command+=" -b /storage"
+command+=" -b /mnt"
+ Set working directory to the home of daffa
+command+=" -w /home/daffa"
+command+=" /usr/bin/env -i"
+command+=" HOME=/home/daffa"
+command+=" PATH=/usr/local/sbin:/usr/local/bin:/bin:/usr/bin:/sbin:/usr/sbin"
+command+=" TERM=\$TERM"
+command+=" LANG=C.UTF-8"
+command+=" /bin/bash --login"
+com="\$@"
+if [ -z "\$1" ]; then
+    exec \$command
+else
+    \$command -c "\$com"
 fi
+EOM
 
-# Link proot to symlink
-proot --link2symlink "$DEST_DIR"
+     Make the startup script executable
+    chmod +x "$bin"
+    echo -e "\033[38;5;214m[${time1}]\033[0m \033[38;5;83m[INFO]:\033[0m \033[38;5;87mStartup script created successfully!\n"
+    echo -e "\033[38;5;214m[${time1}]\033[0m \033[38;5;83m[INFO]:\033[0m \033[38;5;87mCompleting installation...\n"
 
-# Download and extract package lists for package detection
-echo "Downloading package list for better package management..."
-wget -O - "$MIRRORED_URL" | gunzip -c > "$PKG_LIST_FILE"
+     Cleanup downloaded tar file
+    rm "$tar_file"
+    echo -e "\033[38;5;214m[${time1}]\033[0m \033[38;5;83m[INFO]:\033[0m \033[38;5;87mCleaned up temporary files!\n"
 
-# Start the chroot session with additional configurations
-echo "Setting up the chroot environment..."
-proot -0 -r "$DEST_DIR" -b /dev -b /proc -b /sys -b /system -b /data/data/com.termux/files/usr/bin:/bin -w / -0 \
-    /bin/sh -c "echo 'root:toor' | chpasswd; \
-    useradd -m -s /bin/bash $USERNAME; \
-    echo '$USERNAME:$PASSWORD' | chpasswd; \
-    dpkg --print-architecture; \
-    cp /etc/apt/sources.list /etc/apt/sources.list.bak; \
-    echo 'deb http://mirrors.kernel.org/ubuntu/ jammy main universe' > /etc/apt/sources.list; \
-    apt-get update; \
-    apt-get upgrade -y; \
-    apt-get install -y sudo tar wget; \
-    echo '$USERNAME ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers; \
-    echo 'Acquire::http { Proxy \"http://127.0.0.1:8080/\"; };' > /etc/apt/apt.conf.d/99proxy; \
-    su - $USERNAME -c 'echo \"export PS1=\\\"\$USER@jammy:\\\\W\\\\$ \\\"\" >> ~/.bashrc'; \
-    su - $USERNAME -c 'echo \"source /etc/profile\" >> ~/.bashrc'; \
-    su - $USERNAME"
+     Final message
+    echo -e "\033[38;5;214m[${time1}]\033[0m \033[38;5;83m[INFO]:\033[0m \033[38;5;87mInstallation complete! You can now launch Ubuntu using ./$bin\n"
+}
 
-echo "Ubuntu Jammy installation complete!"
-echo "You can now start your Ubuntu environment by running 'proot -0 -r $DEST_DIR -b /dev -b /proc -b /sys -b /system -b /data/data/com.termux/files/usr/bin:/bin -w / /bin/bash -l'"
-
-# Script to check for updates
-echo "Creating a script to check for updates..."
-cat << 'EOF' > "$DEST_DIR/check_update.sh"
-#!/bin/bash
-apt update
-apt upgrade -y
-echo "System updated to the latest packages."
-EOF
-chmod +x "$DEST_DIR/check_update.sh"
-
-# Script to run commands inside chroot
-echo "Creating a script to run commands inside chroot..."
-cat << 'EOF' > "$DEST_DIR/run.sh"
-#!/bin/bash
-if [ -z "$1" ]; then
-    echo "Usage: $0 <command>"
-    exit 1
+ Main script execution
+if [ "$1" = "-y" ]; then
+    install_ubuntu
+elif [ "$1" = "" ]; then
+    echo -e "\033[38;5;214m[${time1}]\033[0m \033[38;5;127m[QUESTION]:\033[0m \033[38;5;87mDo you want to install Ubuntu in Termux? [Y/n] "
+    
+    read cmd1
+    if [ "$cmd1" = "y" ] || [ "$cmd1" = "Y" ]; then
+        install_ubuntu
+    else
+        echo -e "\033[38;5;214m[${time1}]\033[0m \033[38;5;203m[ERROR]:\033[0m \033[38;5;87mInstallation aborted.\n"
+        exit
+    fi
+else
+    echo -e "\033[38;5;214m[${time1}]\033[0m \033[38;5;203m[ERROR]:\033[0m \033[38;5;87mInvalid option. Use -y to skip confirmation or no arguments for a prompt.\n"
+    exit
 fi
-proot -0 -r $HOME/ubuntu-jammy -b /dev -b /proc -b /sys -b /system -b /data/data/com.termux/files/usr/bin:/bin -w / /bin/sh -c "su - daffa -c \"$@\""
-EOF
-chmod +x "$DEST_DIR/run.sh"
-
-# Script to cleanup
-echo "Creating a cleanup script..."
-cat << 'EOF' > "$DEST_DIR/cleanup.sh"
-#!/bin/bash
-rm -rf $HOME/ubuntu-jammy
-rm $HOME/check_update.sh $HOME/run.sh $HOME/cleanup.sh
-echo "Ubuntu Jammy environment has been removed."
-EOF
-chmod +x "$DEST_DIR/cleanup.sh"
-
-# Create symbolic links in Termux home for easy access
-ln -s "$DEST_DIR/check_update.sh" "$HOME/check_update"
-ln -s "$DEST_DIR/run.sh" "$HOME/run"
-ln -s "$DEST_DIR/cleanup.sh" "$HOME/cleanup"
-
-echo "Additional utility scripts have been created:"
-echo "  - Run 'check_update' to update Ubuntu packages"
-echo "  - Run 'run <command>' to execute commands inside the Ubuntu environment"
-echo "  - Run 'cleanup' to remove the Ubuntu environment"
-
-echo "Installation and setup of Ubuntu Jammy completed successfully!"
